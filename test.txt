@@ -1,2 +1,18 @@
 root@npu1-46:/home/GZGKD001/tmp/yanhong/vllm_ascemd_vla# ls /home/GZGKD001/tmp/yanhong/text_svd/cache/data/modelscope/datasets/modelscope/MVBench
 MVBench.tsv  README.md  assert  json  video
+
+
+
+cd /home/GZGKD001/tmp/yanhong/text_svd/cache/tmp/mvbench_images
+
+sha256sum -c mvbench_images.parts.sha256
+
+cat mvbench_images.tar.gz.part-* \
+  > mvbench_images.tar.gz
+
+mkdir -p /project_dir/cache/data
+
+tar -xzf mvbench_images.tar.gz \
+  -C /project_dir/cache/data
+
+ls /project_dir/cache/data/images/MVBench | head
