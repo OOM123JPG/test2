@@ -2,7 +2,16 @@ root@npu1-46:/home/GZGKD001/tmp/yanhong/vllm_ascemd_vla# ls /home/GZGKD001/tmp/y
 MVBench.tsv  README.md  assert  json  video
 
 
+############
+python /home/GZGKD001/tmp/yanhong/text_svd/eval/mmiu_grade.py \
+  --output-dir /home/GZGKD001/tmp/yanhong/text_svd/outputs/mmiu \
+  --judge-api-base http://localhost:8027/v1 \
+  --judge-model qwen3.5-27b-instruct
 
+python /home/GZGKD001/tmp/yanhong/text_svd/eval/mmiu_score.py \
+  --output-dir /home/GZGKD001/tmp/yanhong/text_svd/outputs/mmiu
+
+############
 cd /home/GZGKD001/tmp/yanhong/text_svd/cache/tmp/mvbench_images
 
 sha256sum -c mvbench_images.parts.sha256
