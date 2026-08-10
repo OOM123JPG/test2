@@ -1,0 +1,2 @@
+root@npu1-46:/home/GZGKD001/tmp/yanhong/vllm_ascemd_vla# ls /home/GZGKD001/tmp/yanhong/text_svd/cache/data/modelscope/datasets/modelscope/MVBench
+MVBench.tsv  README.md  assert  json  video
