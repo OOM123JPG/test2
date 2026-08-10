@@ -1,1 +1,2 @@
 evalscope[vlmeval]==0.17.0
+opencv-python-headless
