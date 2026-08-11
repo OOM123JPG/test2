@@ -16,3 +16,9 @@ ls -ld /nfs-share/wx1463835_v2/cache/data/images/MVBench
 readlink -f /nfs-share/wx1463835_v2/cache/data/images/MVBench
 find /nfs-share/wx1463835_v2/cache/data/images/MVBench -maxdepth 2 -name 'frame-*.jpg' | head
 find /nfs-share/wx1463835_v2/cache/data/images/MVBench -maxdepth 1 -name '*.zip' | head
+
+export LMUData=/nfs-share/wx1463835_v2/cache/data
+export MODELSCOPE_CACHE=/nfs-share/wx1463835_v2/cache/data/modelscope
+export MODELSCOPE_OFFLINE=1
+
+--data-dir /nfs-share/wx1463835_v2/cache/data
