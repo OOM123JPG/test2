@@ -104,15 +104,7 @@ def dataset_display_name(dataset: str) -> str:
 
 
 def vlmevalkit_dataset_name(args: argparse.Namespace, dataset: str) -> str:
-    data_name = dataset_display_name(dataset)
-    if dataset.lower() != "mvbench" or not args.data_dir:
-        return data_name
-
-    data_path = Path(args.data_dir).expanduser().resolve()
-    local_tsv = data_path / "MVBench.tsv"
-    if local_tsv.exists():
-        return str(local_tsv)
-    return data_name
+    return dataset_display_name(dataset)
 
 
 def select_backend(args: argparse.Namespace, dataset: str) -> str:
@@ -352,6 +344,16 @@ def patch_mvbench_cache_md5(data_path: Path | None) -> None:
 
     digest = hashlib.md5(mvbench_tsv.read_bytes()).hexdigest()
     patched = []
+    try:
+        import vlmeval.utils.dataset_config as dataset_config
+
+        md5_dict = getattr(dataset_config, "dataset_md5_dict", None)
+        if isinstance(md5_dict, dict) and md5_dict.get("MVBench") != digest:
+            md5_dict["MVBench"] = digest
+            patched.append("dataset_md5_dict.MVBench")
+    except Exception as exc:
+        print(f"Warning: cannot patch MVBench dataset_config MD5: {exc}")
+
     for class_name in ("MVBench", "MVBench_MP4"):
         cls = getattr(mvbench, class_name, None)
         if cls is None or getattr(cls, "MD5", None) == digest:
