@@ -35,123 +35,20 @@ bash scripts/run_evalscope.sh \
   --perf-proxy
 
 ###########
+python - <<'PY'
+import vlmeval.dataset.mvbench as mv
+print(mv.__file__)
+PY
 
-root@npu1-46:/home/GZGKD001/tmp/yanhong/vllm_ascemd_vla# bash /home/GZGKD001/tmp/yanhong/text_svd/scripts/run_evalscope.sh   --port 8000   --datasets mvbench   --nproc 128   --perf-proxy   --no-reuse 
-############ EvalScope ############
-python=python
-port=8000
-datasets=mvbench
-data_dir=/home/GZGKD001/tmp/yanhong/text_svd/cache/data
-modelscope_offline=1
-api_timeout=900
-model=<infer from /v1/models>
-nproc=128
-perf_proxy=1
-perf_proxy_port=<auto: port + 10000>
-Dataset prepare marker exists: /home/GZGKD001/tmp/yanhong/text_svd/cache/locks/evalscope_dataset_6bd3d4f3bd5e05dd2c679d30e16f1598b7615126f05598d01925ea041453c843.ready
-Dataset prepare lock released. Starting inference...
-Inferred model from API: internvl2_8b
-2026-08-11 02:42:09,562 - root - INFO: Did not detect the .env file at /usr/local/python3.11.14/lib/python3.11/site-packages/.env, don't load. 
-Using local MVBench.tsv cache with MD5 706024dbc015592dd13758dbc2225a2c: /home/GZGKD001/tmp/yanhong/text_svd/cache/data/modelscope/datasets/modelscope/MVBench/MVBench.tsv
-Using local BLINK.tsv cache with MD5 d5e8af148b10ac69f535ff7b23f3f989: /home/GZGKD001/tmp/yanhong/text_svd/cache/data/BLINK.tsv
-================================================================================
-EvalScope evaluation
-Model: internvl2_8b
-API URL: http://127.0.0.1:18000/v1/chat/completions
-Dataset: mvbench
-Backend: VLMEvalKit
-Data dir: /home/GZGKD001/tmp/yanhong/text_svd/cache/data
-Output folder: /home/GZGKD001/tmp/yanhong/text_svd/outputs/evalscope/internvl2_8b/mvbench
-Eval batch size: 16
-Collect perf: False
-Generation stream: False
-Reuse: False
-No timestamp: True
-VLMEvalKit video_llm: False
-VLMEvalKit img_size: -1
-VLMEvalKit nframe: default
-VLMEvalKit nproc: 128
-VLMEvalKit API timeout: 900s
-Limit: full
-Perf proxy API URL: http://127.0.0.1:18000/v1/chat/completions
-Perf output folder: /home/GZGKD001/tmp/yanhong/text_svd/outputs/evalscope_perf/internvl2_8b/mvbench
-Perf proxy task_type_inject: False
-Perf proxy task_type_data: <none>
-Note: max_tokens is intentionally not set by this wrapper.
-================================================================================
-2026-08-11 02:42:14 - evalscope - INFO: Args: Task config is provided with dictionary type.
-2026-08-11 02:42:14 - evalscope - INFO: No model is provided, using DummyCustomModel for testing.
-2026-08-11 02:42:14 - evalscope - INFO: Using VLMEvalKitBackendManager
-2026-08-11 02:42:14 - evalscope - INFO: Check VLM Evaluation Kit: Installed
-2026-08-11 02:42:14 - evalscope - INFO: Dump task config to /home/GZGKD001/tmp/yanhong/text_svd/outputs/evalscope/internvl2_8b/mvbench/configs/task_config.yaml
-2026-08-11 02:42:14 - evalscope - INFO: {
-    "model": "text_generation",
-    "model_id": "text_generation",
-    "model_args": {},
-    "model_task": "text_generation",
-    "chat_template": null,
-    "datasets": [],
-    "dataset_args": {},
-    "dataset_dir": "/home/GZGKD001/tmp/yanhong/text_svd/cache/data/modelscope/datasets",
-    "dataset_hub": "modelscope",
-    "repeats": 1,
-    "generation_config": {
-        "batch_size": 16,
-        "stream": false
-    },
-    "eval_type": "mock_llm",
-    "eval_backend": "VLMEvalKit",
-    "eval_config": {
-        "model": [
-            {
-                "type": "internvl2_8b",
-                "name": "CustomAPIModel",
-                "api_base": "http://127.0.0.1:18000/v1/chat/completions",
-                "key": "EMPTY_TOKEN",
-                "temperature": 0.0,
-                "timeout": 900,
-                "img_size": -1,
-                "video_llm": false,
-                "stream": false
-            }
-        ],
-        "data": [
-            "MVBench"
-        ],
-        "reuse": false,
-        "reuse_aux": "infer",
-        "mode": "all",
-        "nproc": 128,
-        "judge": "exact_matching",
-        "work_dir": "/home/GZGKD001/tmp/yanhong/text_svd/outputs/evalscope/internvl2_8b/mvbench"
-    },
-    "limit": null,
-    "eval_batch_size": 16,
-    "use_cache": null,
-    "rerun_review": false,
-    "work_dir": "/home/GZGKD001/tmp/yanhong/text_svd/outputs/evalscope/internvl2_8b/mvbench",
-    "no_timestamp": true,
-    "enable_progress_tracker": false,
-    "ignore_errors": false,
-    "debug": false,
-    "seed": 42,
-    "api_url": null,
-    "timeout": null,
-    "stream": null,
-    "judge_strategy": "auto",
-    "judge_worker_num": null,
-    "judge_model_args": {},
-    "analysis_report": false,
-    "collect_perf": false,
-    "use_sandbox": false,
-    "sandbox_type": "docker",
-    "sandbox_manager_config": {},
-    "evalscope_version": "1.7.0"
-}
-2026-08-11 02:42:14 - evalscope - INFO: *** Run task with config: Arguments(data=['MVBench'], model=['internvl2_8b'], fps=-1, nframe=8, pack=False, use_subtitle=False, work_dir='/home/GZGKD001/tmp/yanhong/text_svd/outputs/evalscope/internvl2_8b/mvbench', mode='all', nproc=128, retry=None, judge='exact_matching', verbose=False, ignore=False, reuse=False, limit=None, config=None, judge_args=None, use_vllm=False, reuse_aux='infer', use_verifier=False, OPENAI_API_KEY='EMPTY', OPENAI_API_BASE=None, LOCAL_LLM=None) 
 
---reuse is not set, will not reuse previous (before one day) temporary files
-fatal: not a git repository (or any of the parent directories): .git
-Using API Base: http://127.0.0.1:18000/v1/chat/completions; API Key: EMPTY_TOKEN
-100%|███████████████████████████████████████████████████████| 3800/3800 [01:33<00:00, 40.45it/s]
-  1%|▌                                                      | 37/3800 [01:07<1:39:04,  1.58s/it]
+
+
+
+
+
+
+
+
+
+
+
