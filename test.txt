@@ -12,13 +12,14 @@ python /home/GZGKD001/tmp/yanhong/text_svd/eval/mmiu_score.py \
   --output-dir /home/GZGKD001/tmp/yanhong/text_svd/outputs/mmiu
 
 ############
+# 1. 看 images/MVBench 是不是错误软链
 ls -ld /nfs-share/wx1463835_v2/cache/data/images/MVBench
 readlink -f /nfs-share/wx1463835_v2/cache/data/images/MVBench
-find /nfs-share/wx1463835_v2/cache/data/images/MVBench -maxdepth 2 -name 'frame-*.jpg' | head
-find /nfs-share/wx1463835_v2/cache/data/images/MVBench -maxdepth 1 -name '*.zip' | head
 
-export LMUData=/nfs-share/wx1463835_v2/cache/data
-export MODELSCOPE_CACHE=/nfs-share/wx1463835_v2/cache/data/modelscope
-export MODELSCOPE_OFFLINE=1
+# 2. 看有没有套娃目录
+find /nfs-share/wx1463835_v2/cache/data/modelscope/datasets/modelscope/MVBench \
+  -maxdepth 4 -type d -name modelscope -print
 
---data-dir /nfs-share/wx1463835_v2/cache/data
+# 3. 看真正的 MVBench.tsv
+ls -l /nfs-share/wx1463835_v2/cache/data/MVBench.tsv
+ls -l /nfs-share/wx1463835_v2/cache/data/modelscope/datasets/modelscope/MVBench/MVBench.tsv
