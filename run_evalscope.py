@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -418,6 +419,85 @@ def patch_blink_cache_md5(data_path: Path | None) -> None:
         print(f"Using local BLINK.tsv cache with MD5 {digest}: {blink_tsv}")
 
 
+def install_remote_access_tracers() -> None:
+    """Print a stack trace when dataset code tries to download remote resources."""
+    if os.environ.get("TEXT_SVD_TRACE_REMOTE", "1") == "0":
+        return
+
+    def wrap(module_name: str, func_name: str) -> None:
+        try:
+            module = importlib.import_module(module_name)
+            original = getattr(module, func_name, None)
+        except Exception:
+            return
+        if original is None or getattr(original, "_text_svd_traced", False):
+            return
+
+        def traced(*args: Any, **kwargs: Any) -> Any:
+            print("=" * 80)
+            print(f"[TEXT_SVD_REMOTE_TRACE] {module_name}.{func_name} called")
+            print(f"[TEXT_SVD_REMOTE_TRACE] args={args!r}")
+            print(f"[TEXT_SVD_REMOTE_TRACE] kwargs={kwargs!r}")
+            print("[TEXT_SVD_REMOTE_TRACE] stack:")
+            traceback.print_stack(limit=18)
+            print("=" * 80)
+            return original(*args, **kwargs)
+
+        traced._text_svd_traced = True  # type: ignore[attr-defined]
+        setattr(module, func_name, traced)
+
+    for module_name, func_name in (
+        ("vlmeval.utils.dataset", "download_file"),
+        ("vlmeval.smp.file", "download_file"),
+        ("modelscope", "dataset_snapshot_download"),
+        ("modelscope.hub.snapshot_download", "snapshot_download"),
+        ("modelscope.msdatasets", "MsDataset"),
+    ):
+        wrap(module_name, func_name)
+
+
+def print_dataset_debug(args: argparse.Namespace, data_path: Path | None) -> None:
+    if os.environ.get("TEXT_SVD_DATA_DEBUG", "1") == "0":
+        return
+    print("=" * 80)
+    print("[TEXT_SVD_DATA_DEBUG] dataset environment")
+    for key in (
+        "LMUData",
+        "EVALSCOPE_CACHE_DIR",
+        "MODELSCOPE_CACHE",
+        "MODELSCOPE_OFFLINE",
+        "HF_HOME",
+        "HF_HUB_OFFLINE",
+        "HF_DATASETS_OFFLINE",
+        "TRANSFORMERS_OFFLINE",
+    ):
+        print(f"[TEXT_SVD_DATA_DEBUG] {key}={os.environ.get(key, '<unset>')}")
+    if data_path is not None:
+        paths = (
+            data_path / "MVBench.tsv",
+            data_path / "images" / "MVBench",
+            data_path / "modelscope" / "datasets" / "modelscope" / "MVBench" / "MVBench.tsv",
+            data_path / "modelscope" / "datasets" / "modelscope" / "MVBench" / "video",
+        )
+        for path in paths:
+            print(f"[TEXT_SVD_DATA_DEBUG] exists={path.exists()} is_symlink={path.is_symlink()} path={path}")
+        frame_count = 0
+        frame_root = data_path / "images" / "MVBench"
+        if frame_root.exists():
+            frame_count = sum(1 for _ in frame_root.glob("*/*.jpg"))
+        print(f"[TEXT_SVD_DATA_DEBUG] MVBench frame jpg count under images/MVBench: {frame_count}")
+    try:
+        import vlmeval.utils.dataset_config as dataset_config
+
+        md5_dict = getattr(dataset_config, "dataset_md5_dict", {})
+        dataset_urls = getattr(dataset_config, "dataset_URLs", {})
+        print(f"[TEXT_SVD_DATA_DEBUG] VLMEvalKit MVBench url={dataset_urls.get('MVBench')}")
+        print(f"[TEXT_SVD_DATA_DEBUG] VLMEvalKit MVBench md5={md5_dict.get('MVBench')}")
+    except Exception as exc:
+        print(f"[TEXT_SVD_DATA_DEBUG] cannot inspect VLMEvalKit dataset_config: {exc}")
+    print("=" * 80)
+
+
 def import_run_task():
     script_dir = str(SCRIPT_DIR)
     removed_paths: list[tuple[int, str]] = []
@@ -478,6 +558,8 @@ def run_evalscope(args: argparse.Namespace) -> None:
     run_task = import_run_task()
     patch_mvbench_cache_md5(data_path)
     patch_blink_cache_md5(data_path)
+    print_dataset_debug(args, data_path)
+    install_remote_access_tracers()
     model_work_dir = Path(args.work_dir).expanduser().resolve() / model_dir_name(args.model)
     original_api_url = args.api_url
     if args.perf_proxy and args.perf_proxy_port is None:
