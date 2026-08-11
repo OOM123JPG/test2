@@ -103,6 +103,18 @@ def dataset_display_name(dataset: str) -> str:
     return names.get(dataset.lower(), dataset)
 
 
+def vlmevalkit_dataset_name(args: argparse.Namespace, dataset: str) -> str:
+    data_name = dataset_display_name(dataset)
+    if dataset.lower() != "mvbench" or not args.data_dir:
+        return data_name
+
+    data_path = Path(args.data_dir).expanduser().resolve()
+    local_tsv = data_path / "MVBench.tsv"
+    if local_tsv.exists():
+        return str(local_tsv)
+    return data_name
+
+
 def select_backend(args: argparse.Namespace, dataset: str) -> str:
     if args.backend != "auto":
         return args.backend
@@ -158,7 +170,7 @@ def build_vlmevalkit_task_kwargs(
                 "stream": args.stream,
             }
         ],
-        "data": [dataset_display_name(dataset)],
+        "data": [vlmevalkit_dataset_name(args, dataset)],
         "reuse": args.reuse,
         "reuse_aux": "infer",
         "mode": "all",
