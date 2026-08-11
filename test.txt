@@ -12,16 +12,7 @@ python /home/GZGKD001/tmp/yanhong/text_svd/eval/mmiu_score.py \
   --output-dir /home/GZGKD001/tmp/yanhong/text_svd/outputs/mmiu
 
 ############
-cd /home/GZGKD001/tmp/yanhong/text_svd/cache/tmp/mvbench_images
-
-sha256sum -c mvbench_images.parts.sha256
-
-cat mvbench_images.tar.gz.part-* \
-  > mvbench_images.tar.gz
-
-mkdir -p /project_dir/cache/data
-
-tar -xzf mvbench_images.tar.gz \
-  -C /project_dir/cache/data
-
-ls /project_dir/cache/data/images/MVBench | head
+ls -ld /nfs-share/wx1463835_v2/cache/data/images/MVBench
+readlink -f /nfs-share/wx1463835_v2/cache/data/images/MVBench
+find /nfs-share/wx1463835_v2/cache/data/images/MVBench -maxdepth 2 -name 'frame-*.jpg' | head
+find /nfs-share/wx1463835_v2/cache/data/images/MVBench -maxdepth 1 -name '*.zip' | head
