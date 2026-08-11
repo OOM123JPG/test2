@@ -14,3 +14,13 @@ python /home/GZGKD001/tmp/yanhong/text_svd/eval/mmiu_score.py \
 ############
 find /nfs-share/wx1463835_v2/cache/data/images/MVBench \
   -maxdepth 2 -name 'frame-*.jpg' | head
+
+unset LMUData EVALSCOPE_CACHE_DIR MODELSCOPE_CACHE HF_HOME HF_DATASETS_CACHE
+export MODELSCOPE_OFFLINE=1
+export PROJECT_DIR=/project_dir
+
+bash /project_dir/scripts/run_evalscope.sh \
+  --port 1008 \
+  --datasets mvbench \
+  --data-dir /nfs-share/wx1463835_v2/cache/data \
+  --perf-proxy
