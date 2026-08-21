@@ -4,8 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import csv
 import json
+import re
 import shlex
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -32,9 +36,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--model", default="", help="Optional. Inferred from /v1/models or --port.")
-    parser.add_argument("--task", default="multiple_image_captioning")
+    parser.add_argument("--source", choices=["mvbench", "mmiu"], default="mvbench")
+    parser.add_argument("--task", default="multiple_image_captioning", help="MMIU task name when --source mmiu.")
     parser.add_argument("--index", type=int, default=0)
-    parser.add_argument("--max-tokens", type=int, default=220)
+    parser.add_argument("--frames", type=int, default=8, help="Number of MVBench sampled frames to use.")
+    parser.add_argument("--max-tokens", type=int, default=80)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--no-stream", action="store_true")
@@ -282,6 +288,65 @@ def load_row(task_name: str, index: int) -> tuple[Path, Path, dict]:
     return json_path, image_dir, rows[index]
 
 
+def frame_sort_key(path: Path) -> tuple[int, str]:
+    match = re.search(r"frame-(\d+)-of-(\d+)", path.name)
+    if match:
+        return int(match.group(1)), path.name
+    return 10**9, path.name
+
+
+def load_mvbench_sample(index: int, frames: int) -> tuple[Path, dict, list[Path], str, str]:
+    tsv_path = DATA_DIR / "MVBench.tsv"
+    image_root = DATA_DIR / "images" / "MVBench"
+    if not tsv_path.exists():
+        raise SystemExit(f"MVBench TSV not found: {tsv_path}")
+    if not image_root.exists():
+        raise SystemExit(f"MVBench frame dir not found: {image_root}")
+
+    csv.field_size_limit(sys.maxsize)
+    with tsv_path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
+    if index < 0 or index >= len(rows):
+        raise SystemExit(f"--index {index} is out of range for {tsv_path}, rows={len(rows)}")
+
+    row = rows[index]
+    video = row["video"]
+    frame_dir = image_root / video
+    all_frames = sorted(frame_dir.glob(f"frame-*-of-{frames}.jpg"), key=frame_sort_key)
+    if len(all_frames) < frames:
+        available = sorted(frame_dir.glob("frame-*.jpg"), key=frame_sort_key)
+        raise SystemExit(
+            f"Need {frames} MVBench frames for {video}, found {len(all_frames)}. "
+            f"Available examples: {[p.name for p in available[:12]]}"
+        )
+    selected = all_frames[:frames]
+    candidates = ast.literal_eval(row["candidates"])
+    labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    answer_text = row["answer"]
+    answer_letter = next(
+        (labels[i] for i, candidate in enumerate(candidates) if candidate == answer_text),
+        answer_text,
+    )
+    prompt = build_mvbench_prompt(row, candidates, frames)
+    return tsv_path, row, selected, prompt, answer_letter
+
+
+def build_mvbench_prompt(row: dict, candidates: list[str], frames: int) -> str:
+    labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    choices = "\n".join(f"{labels[i]}. {candidate}" for i, candidate in enumerate(candidates))
+    return f"""You are given {frames} sampled frames from a video, ordered from early to late.
+
+Question:
+{row["question"]}
+
+Choices:
+{choices}
+
+Answer in exactly two lines:
+Evidence: one short sentence based only on the frames.
+Final answer: <letter>."""
+
+
 def build_reasoning_prompt(row: dict, extra: str) -> str:
     input_layer = row.get("input", row)
     context = input_layer.get("context", "")
@@ -324,17 +389,24 @@ def print_summary(model: str, result: dict) -> None:
 def main() -> None:
     args = parse_args()
     model, model_source = infer_model(args)
-    json_path, image_dir, row = load_row(args.task, args.index)
-    image_paths = image_paths_from_row(image_dir, row)
-    if not image_paths or not all(path.exists() for path in image_paths):
-        missing = [str(path) for path in image_paths if not path.exists()]
-        raise SystemExit(f"Sample images are incomplete. Missing: {missing}")
+    if args.source == "mvbench":
+        source_path, row, image_paths, prompt, expected = load_mvbench_sample(args.index, args.frames)
+        task_label = row.get("task_type", "MVBench")
+    else:
+        source_path, image_dir, row = load_row(args.task, args.index)
+        image_paths = image_paths_from_row(image_dir, row)
+        if not image_paths or not all(path.exists() for path in image_paths):
+            missing = [str(path) for path in image_paths if not path.exists()]
+            raise SystemExit(f"Sample images are incomplete. Missing: {missing}")
+        prompt = build_reasoning_prompt(row, "")
+        expected = row.get("output", {}).get("output_text", "")
+        task_label = args.task
 
+    if args.prompt_extra:
+        prompt += "\n" + args.prompt_extra.strip()
     image_urls = [local_url(path) for path in image_paths]
-    prompt = build_reasoning_prompt(row, args.prompt_extra)
     payload = build_payload(args, model, image_urls, prompt)
     url = endpoint(args)
-    expected = row.get("output", {}).get("output_text", "")
 
     print("=" * 72)
     print("VLM reasoning demo")
@@ -345,9 +417,14 @@ def main() -> None:
     print(f"Streaming: {not args.no_stream}")
     print(f"Max tokens: {args.max_tokens}")
     print("\nQuestion info:")
-    print(f"  Task: {args.task}")
+    print(f"  Source: {args.source}")
+    print(f"  Task: {task_label}")
     print(f"  Row index: {args.index}")
-    print(f"  Source: {json_path}")
+    if args.source == "mvbench":
+        print(f"  Video: {row.get('video')}")
+        if row.get("start") and row.get("end"):
+            print(f"  Clip: {row.get('start')}s - {row.get('end')}s")
+    print(f"  Metadata: {source_path}")
     print(f"  Image count: {len(image_urls)}")
     print("Images:")
     for idx, image_url in enumerate(image_urls, 1):
