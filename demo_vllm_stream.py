@@ -12,11 +12,20 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 from typing import Any
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_DIR / "cache" / "data"
+MODEL_BY_PORT = {
+    8000: "internvl2_8b",
+    8010: "internvl2_8b_svd_text_160_0703",
+    8020: "internvl2_26b",
+    8030: "internvl2_26b_svd_text_160_0703",
+    8040: "internvl2_40b",
+    8050: "internvl2_40b_svd_text_160_0703",
+}
 
 
 @dataclass
@@ -26,6 +35,7 @@ class Sample:
     expected: str = ""
     name: str = "sample"
     index: int = 0
+    source_file: str = ""
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,13 +45,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-base", default="", help="OpenAI API base, e.g. http://127.0.0.1:8010/v1")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--model", default="internvl2_8b")
+    parser.add_argument("--model", default="", help="Optional. Inferred from --port for the default serve scripts.")
     parser.add_argument(
         "--preset",
         choices=["multi-image", "visual-correspondence", "art-style", "describe"],
         default="multi-image",
     )
-    parser.add_argument("--num-samples", type=int, default=3, help="Number of preset samples to run.")
+    parser.add_argument("--num-samples", type=int, default=10, help="Number of preset samples to run.")
     parser.add_argument(
         "--task",
         default="Icon_Question_Answering_with_Spatial_Context",
@@ -59,6 +69,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--show-payload", action="store_true")
     parser.add_argument("--curl-only", action="store_true", help="Only print the equivalent curl command.")
     return parser.parse_args()
+
+
+def infer_model(args: argparse.Namespace) -> str:
+    if args.model:
+        return args.model
+    if args.port in MODEL_BY_PORT:
+        return MODEL_BY_PORT[args.port]
+    raise SystemExit(
+        f"Cannot infer model name for port {args.port}. Pass --model explicitly, "
+        f"or use one of: {', '.join(str(port) for port in sorted(MODEL_BY_PORT))}"
+    )
 
 
 def local_url(path: Path) -> str:
@@ -112,6 +133,7 @@ def mmiu_samples(task_name: str, limit: int, min_images: int, max_images: int) -
                 expected=row.get("output", {}).get("output_text", ""),
                 name=task_name,
                 index=idx,
+                source_file=str(task),
             )
         )
         if len(samples) >= limit:
@@ -141,6 +163,7 @@ def first_existing_visual_correspondence() -> Sample:
                 expected=answer,
                 name="visual_correspondence_blink",
                 index=idx,
+                source_file=str(task),
             )
     raise FileNotFoundError(f"No complete image pair found under {task_dir}")
 
@@ -170,6 +193,7 @@ def first_existing_art_style() -> Sample:
                 image_urls=[local_url(path) for path in existing],
                 prompt=prompt,
                 name="art_style",
+                source_file=str(blink_dir),
             )
     raise FileNotFoundError(f"No art-style images found under {blink_dir}")
 
@@ -182,6 +206,7 @@ def describe_preset() -> Sample:
         image_urls=[local_url(image)],
         prompt="Describe the image in one concise paragraph.",
         name="describe",
+        source_file=str(image),
     )
 
 
@@ -198,6 +223,7 @@ def build_samples(args: argparse.Namespace) -> list[Sample]:
                 image_urls=urls,
                 prompt=args.prompt or "Answer the question based on the image(s).",
                 name="custom",
+                source_file="custom",
             )
         ]
 
@@ -216,13 +242,18 @@ def build_samples(args: argparse.Namespace) -> list[Sample]:
     return samples
 
 
-def build_payload(args: argparse.Namespace, image_urls: list[str], prompt: str) -> dict[str, Any]:
+def build_payload(
+    args: argparse.Namespace,
+    model: str,
+    image_urls: list[str],
+    prompt: str,
+) -> dict[str, Any]:
     content: list[dict[str, Any]] = [
         {"type": "image_url", "image_url": {"url": image_url}} for image_url in image_urls
     ]
     content.append({"type": "text", "text": prompt})
     payload: dict[str, Any] = {
-        "model": args.model,
+        "model": model,
         "messages": [{"role": "user", "content": content}],
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,
@@ -248,6 +279,26 @@ def print_curl(url: str, payload: dict[str, Any]) -> None:
         + "--data "
         + shlex.quote(compact)
     )
+
+
+def image_info(image_url: str) -> str:
+    parsed = urlparse(image_url)
+    if parsed.scheme != "file":
+        return image_url
+
+    path = Path(unquote(parsed.path))
+    parts = [path.name]
+    if path.exists():
+        size_kib = path.stat().st_size / 1024
+        parts.append(f"{size_kib:.1f} KiB")
+        try:
+            from PIL import Image
+
+            with Image.open(path) as img:
+                parts.append(f"{img.width}x{img.height}")
+        except Exception:
+            pass
+    return " | ".join(parts)
 
 
 def post(url: str, payload: dict[str, Any], timeout: float):
@@ -336,13 +387,17 @@ def print_metrics(
         print(f"  Output tokens: {completion_tokens}")
         print(f"  Total tokens: {total_tokens}")
         if completion_tokens and total > 0:
-            print(f"  Output throughput: {completion_tokens / total:.2f} tok/s")
+            output_throughput = completion_tokens / total
+            print(f"  Output throughput: {output_throughput:.2f} tok/s")
+        else:
+            output_throughput = None
         return {
             "latency_s": total,
             "ttft_ms": (first_token_at - start) * 1000 if first_token_at is not None else None,
             "prompt_tokens": prompt_tokens,
             "output_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "output_throughput": output_throughput,
             "finish_reason": finish_reason,
         }
     else:
@@ -358,6 +413,7 @@ def print_metrics(
 
 def main() -> None:
     args = parse_args()
+    model = infer_model(args)
     samples = build_samples(args)
     url = endpoint(args)
 
@@ -365,21 +421,33 @@ def main() -> None:
     print("VLM service smoke test")
     print("=" * 72)
     print(f"Endpoint: {url}")
-    print(f"Model: {args.model}")
+    print(f"Model: {model}")
+    if not args.model:
+        print(f"Model source: inferred from port {args.port}")
     print(f"Streaming: {not args.no_stream}")
     print(f"Samples: {len(samples)}")
+    if args.preset == "multi-image":
+        indexes = ", ".join(str(sample.index) for sample in samples)
+        print(f"Question set: task={args.task}, row_indexes=[{indexes}]")
+        print(f"Image count filter: {args.min_images}-{args.max_images}")
     print(f"Max tokens: {args.max_tokens}")
 
     results: list[dict[str, Any]] = []
     try:
         for sample_no, sample in enumerate(samples, 1):
-            payload = build_payload(args, sample.image_urls, sample.prompt)
+            payload = build_payload(args, model, sample.image_urls, sample.prompt)
             print("\n" + "-" * 72)
             print(f"Sample {sample_no}/{len(samples)}: {sample.name}[{sample.index}]")
             print("-" * 72)
+            print("Question info:")
+            print(f"  Task: {sample.name}")
+            print(f"  Row index: {sample.index}")
+            print(f"  Source: {sample.source_file}")
+            print(f"  Image count: {len(sample.image_urls)}")
             print("Images:")
             for idx, image_url in enumerate(sample.image_urls, 1):
-                print(f"  {idx}. {image_url}")
+                print(f"  {idx}. {image_info(image_url)}")
+                print(f"     {image_url}")
             print("\nQuestion:")
             print(sample.prompt)
             if sample.expected:
@@ -414,6 +482,19 @@ def main() -> None:
         print(f"Average latency: {avg_latency:.3f} s")
         if avg_ttft is not None:
             print(f"Average TTFT: {avg_ttft:.1f} ms")
+        throughputs = [
+            item["output_throughput"]
+            for item in results
+            if item.get("output_throughput") is not None
+        ]
+        if throughputs:
+            avg_throughput = sum(throughputs) / len(throughputs)
+            total_output_tokens = sum(item.get("output_tokens") or 0 for item in results)
+            total_latency = sum(item["latency_s"] for item in results)
+            print(f"Average output throughput: {avg_throughput:.2f} tok/s")
+            if total_latency > 0:
+                print(f"Overall output throughput: {total_output_tokens / total_latency:.2f} tok/s")
+            print(f"Total output tokens: {total_output_tokens}")
         truncated = sum(1 for item in results if item.get("finish_reason") == "length")
         print(f"Truncated by max_tokens: {truncated}")
 
