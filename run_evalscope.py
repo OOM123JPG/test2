@@ -161,6 +161,7 @@ def build_vlmevalkit_task_kwargs(
                 "img_size": img_size,
                 "video_llm": args.video_llm,
                 "stream": args.stream,
+                "max_tokens": 1024,
             }
         ],
         "data": [vlmevalkit_dataset_name(args, dataset)],
