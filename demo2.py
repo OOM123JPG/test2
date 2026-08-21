@@ -5,23 +5,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import time
 import urllib.error
+import urllib.request
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
-from demo_vllm_stream import (
-    DATA_DIR,
-    build_payload,
-    display_image_path,
-    endpoint,
-    image_info,
-    image_paths_from_row,
-    infer_model,
-    local_url,
-    non_stream_response,
-    print_curl,
-    stream_response,
-)
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_DIR / "cache" / "data"
+MODEL_BY_PORT = {
+    8000: "internvl2_8b",
+    8010: "internvl2_8b_svd_text_160_0703",
+    8020: "internvl2_26b",
+    8030: "internvl2_26b_svd_text_160_0703",
+    8040: "internvl2_40b",
+    8050: "internvl2_40b_svd_text_160_0703",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,6 +46,226 @@ def parse_args() -> argparse.Namespace:
         help="Extra instruction appended to the default analysis prompt.",
     )
     return parser.parse_args()
+
+
+def models_endpoint(args: argparse.Namespace) -> str:
+    api_base = args.api_base or f"http://{args.host}:{args.port}/v1"
+    return f"{api_base.rstrip('/')}/models"
+
+
+def fetch_served_models(args: argparse.Namespace) -> list[str]:
+    req = urllib.request.Request(models_endpoint(args), method="GET")
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return [item["id"] for item in data.get("data", []) if item.get("id")]
+
+
+def infer_model(args: argparse.Namespace) -> tuple[str, str]:
+    if args.model:
+        return args.model, "command line"
+
+    try:
+        served_models = fetch_served_models(args)
+    except Exception:
+        served_models = []
+
+    if served_models:
+        mapped_model = MODEL_BY_PORT.get(args.port)
+        if mapped_model in served_models:
+            return mapped_model, models_endpoint(args)
+        return served_models[0], models_endpoint(args)
+
+    if args.port in MODEL_BY_PORT:
+        return MODEL_BY_PORT[args.port], f"fallback port map {args.port}"
+    raise SystemExit(
+        f"Cannot fetch or infer model name for port {args.port}. Pass --model explicitly, "
+        f"or use one of: {', '.join(str(port) for port in sorted(MODEL_BY_PORT))}"
+    )
+
+
+def endpoint(args: argparse.Namespace) -> str:
+    api_base = args.api_base or f"http://{args.host}:{args.port}/v1"
+    return f"{api_base.rstrip('/')}/chat/completions"
+
+
+def local_url(path: Path) -> str:
+    return f"file://{path.expanduser().resolve()}"
+
+
+def image_paths_from_row(task_dir: Path, row: dict) -> list[Path]:
+    input_layer = row.get("input", row)
+    if not isinstance(input_layer, dict):
+        input_layer = row
+    old_paths = input_layer.get("input_image_path", input_layer.get("image", []))
+    if isinstance(old_paths, str):
+        old_paths = [old_paths]
+    return [task_dir / Path(old).name for old in old_paths]
+
+
+def image_info(image_url: str) -> str:
+    parsed = urlparse(image_url)
+    if parsed.scheme != "file":
+        return image_url
+
+    path = Path(unquote(parsed.path))
+    parts = [path.name]
+    if path.exists():
+        parts.append(f"{path.stat().st_size / 1024:.1f} KiB")
+        try:
+            from PIL import Image
+
+            with Image.open(path) as img:
+                parts.append(f"{img.width}x{img.height}")
+        except Exception:
+            pass
+    return " | ".join(parts)
+
+
+def display_image_path(image_url: str) -> str:
+    parsed = urlparse(image_url)
+    if parsed.scheme == "file":
+        return unquote(parsed.path)
+    return image_url
+
+
+def build_payload(
+    args: argparse.Namespace,
+    model: str,
+    image_urls: list[str],
+    prompt: str,
+) -> dict:
+    content = [{"type": "image_url", "image_url": {"url": image_url}} for image_url in image_urls]
+    content.append({"type": "text", "text": prompt})
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": args.temperature,
+        "max_tokens": args.max_tokens,
+        "stream": not args.no_stream,
+    }
+    if not args.no_stream:
+        payload["stream_options"] = {"include_usage": True}
+    return payload
+
+
+def print_curl(url: str, payload: dict) -> None:
+    compact = json.dumps(payload, ensure_ascii=False)
+    print("Equivalent curl:")
+    print(
+        "curl -N "
+        + shlex.quote(url)
+        + " -H 'Content-Type: application/json' "
+        + "--data "
+        + shlex.quote(compact)
+    )
+
+
+def post(url: str, payload: dict, timeout: float):
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def print_metrics(
+    start: float,
+    end: float,
+    first_token_at: float | None,
+    generated: str,
+    usage: dict | None,
+    finish_reason: str = "",
+) -> dict:
+    total = end - start
+    print("\n\nTiming:")
+    if first_token_at is not None:
+        print(f"  TTFT: {(first_token_at - start) * 1000:.1f} ms")
+    else:
+        print("  TTFT: n/a")
+    print(f"  Total latency: {total:.3f} s")
+    if finish_reason:
+        print(f"  Finish reason: {finish_reason}")
+        if finish_reason == "length":
+            print("  Note: output hit max_tokens; increase --max-tokens for a complete answer.")
+
+    result = {
+        "latency_s": total,
+        "ttft_ms": (first_token_at - start) * 1000 if first_token_at is not None else None,
+        "finish_reason": finish_reason,
+    }
+    if usage:
+        completion_tokens = usage.get("completion_tokens")
+        prompt_tokens = usage.get("prompt_tokens")
+        total_tokens = usage.get("total_tokens")
+        print(f"  Prompt tokens: {prompt_tokens}")
+        print(f"  Output tokens: {completion_tokens}")
+        print(f"  Total tokens: {total_tokens}")
+        if completion_tokens and total > 0:
+            output_throughput = completion_tokens / total
+            print(f"  Output throughput: {output_throughput:.2f} tok/s")
+        else:
+            output_throughput = None
+        result.update(
+            {
+                "prompt_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "output_throughput": output_throughput,
+            }
+        )
+    else:
+        print(f"  Output words: {len(generated.split())}")
+    return result
+
+
+def stream_response(url: str, payload: dict, timeout: float) -> dict:
+    start = time.perf_counter()
+    first_token_at: float | None = None
+    generated = ""
+    usage: dict | None = None
+    finish_reason = ""
+
+    with post(url, payload, timeout) as resp:
+        print(f"\nHTTP {resp.status} {resp.reason}")
+        print("\nModel output:")
+        for raw in resp:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line or not line.startswith("data:"):
+                continue
+            data = line.removeprefix("data:").strip()
+            if data == "[DONE]":
+                break
+            chunk = json.loads(data)
+            if chunk.get("usage"):
+                usage = chunk["usage"]
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            if choices[0].get("finish_reason"):
+                finish_reason = choices[0]["finish_reason"]
+            token = (choices[0].get("delta") or {}).get("content") or ""
+            if token:
+                if first_token_at is None:
+                    first_token_at = time.perf_counter()
+                generated += token
+                print(token, end="", flush=True)
+    end = time.perf_counter()
+    return print_metrics(start, end, first_token_at, generated, usage, finish_reason)
+
+
+def non_stream_response(url: str, payload: dict, timeout: float) -> dict:
+    start = time.perf_counter()
+    with post(url, payload, timeout) as resp:
+        body = resp.read().decode("utf-8")
+    end = time.perf_counter()
+    data = json.loads(body)
+    choice = data["choices"][0]
+    text = choice["message"]["content"]
+    print("\nModel output:")
+    print(text)
+    return print_metrics(start, end, None, text, data.get("usage"), choice.get("finish_reason", ""))
 
 
 def load_row(task_name: str, index: int) -> tuple[Path, Path, dict]:
