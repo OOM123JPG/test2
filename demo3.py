@@ -18,13 +18,21 @@ from urllib.parse import unquote, urlparse
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_DIR / "cache" / "data"
-MODEL_BY_PORT = {
-    8000: "internvl2_8b",
-    8010: "internvl2_8b_svd_text_160_0703",
-    8020: "internvl2_26b",
-    8030: "internvl2_26b_svd_text_160_0703",
-    8040: "internvl2_40b",
-    8050: "internvl2_40b_svd_text_160_0703",
+PROFILE_OFFSETS = {
+    "8b": 0,
+    "8b_svd_text": 10,
+    "26b": 20,
+    "26b_svd_text": 30,
+    "40b": 40,
+    "40b_svd_text": 50,
+}
+DEFAULT_MODEL_BY_PROFILE = {
+    "8b": "internvl2_8b",
+    "8b_svd_text": "internvl2_8b_svd_text_160_0703",
+    "26b": "internvl2_26b",
+    "26b_svd_text": "internvl2_26b_svd_text_160_0703",
+    "40b": "internvl2_40b",
+    "40b_svd_text": "internvl2_40b_svd_text_160_0703",
 }
 DEFAULT_PORT = 8000
 PROBE_TIMEOUT = 1.0
@@ -36,7 +44,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--api-base", default="", help="OpenAI API base, e.g. http://127.0.0.1:8010/v1")
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--base-port", type=int, default=DEFAULT_PORT, help="Base port for profile offsets.")
     parser.add_argument("--port", type=int, default=None, help="Optional. Can be inferred from --model.")
+    parser.add_argument(
+        "--profile",
+        choices=sorted(PROFILE_OFFSETS),
+        default="",
+        help="Model profile used to infer --port from --base-port.",
+    )
     parser.add_argument(
         "--probe-ports",
         default="",
@@ -46,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", choices=["mvbench", "mmiu"], default="mvbench")
     parser.add_argument("--task", default="multiple_image_captioning", help="MMIU task name when --source mmiu.")
     parser.add_argument("--index", type=int, default=0)
-    parser.add_argument("--frames", type=int, default=8, help="Number of MVBench sampled frames to use.")
+    parser.add_argument("--frames", type=int, default=8, help="Number of MVBench sampled frames to use. Local cache usually has 4 or 8.")
     parser.add_argument("--max-tokens", type=int, default=80)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--timeout", type=float, default=300.0)
@@ -66,7 +81,7 @@ def api_base_for(args: argparse.Namespace, port: int | None = None) -> str:
         return args.api_base.rstrip("/")
     target_port = port if port is not None else args.port
     if target_port is None:
-        target_port = DEFAULT_PORT
+        target_port = args.base_port
     return f"http://{args.host}:{target_port}/v1"
 
 
@@ -82,8 +97,38 @@ def fetch_served_models(args: argparse.Namespace, port: int | None = None, timeo
     return [item["id"] for item in data.get("data", []) if item.get("id")]
 
 
-def model_to_port(model: str) -> int | None:
-    for port, served_model in MODEL_BY_PORT.items():
+def known_model_by_port(args: argparse.Namespace) -> dict[int, str]:
+    return {
+        args.base_port + offset: model
+        for profile, offset in PROFILE_OFFSETS.items()
+        for model in [DEFAULT_MODEL_BY_PROFILE[profile]]
+    }
+
+
+def port_for_profile(args: argparse.Namespace, profile: str) -> int:
+    return args.base_port + PROFILE_OFFSETS[profile]
+
+
+def infer_profile_from_model(model: str) -> str | None:
+    normalized = model.lower().replace("-", "_")
+    if "40b" in normalized:
+        size = "40b"
+    elif "26b" in normalized:
+        size = "26b"
+    elif "8b" in normalized:
+        size = "8b"
+    else:
+        return None
+
+    is_svd = "svd" in normalized
+    return f"{size}_svd_text" if is_svd else size
+
+
+def model_to_port(args: argparse.Namespace, model: str) -> int | None:
+    profile = infer_profile_from_model(model)
+    if profile:
+        return port_for_profile(args, profile)
+    for port, served_model in known_model_by_port(args).items():
         if served_model == model:
             return port
     return None
@@ -91,7 +136,7 @@ def model_to_port(model: str) -> int | None:
 
 def probe_ports(args: argparse.Namespace) -> list[int]:
     if not args.probe_ports:
-        return sorted(MODEL_BY_PORT)
+        return sorted(known_model_by_port(args))
     ports = []
     for item in args.probe_ports.split(","):
         item = item.strip()
@@ -144,14 +189,27 @@ def resolve_service(args: argparse.Namespace) -> tuple[str, str, str]:
             return args.model, "command line", api_base_for(args, args.port)
 
         if served_models:
-            mapped_model = MODEL_BY_PORT.get(args.port)
+            mapped_model = known_model_by_port(args).get(args.port)
             if mapped_model in served_models:
                 return mapped_model, models_endpoint(args, args.port), api_base_for(args, args.port)
             return served_models[0], models_endpoint(args, args.port), api_base_for(args, args.port)
 
-        if args.port in MODEL_BY_PORT:
-            return MODEL_BY_PORT[args.port], f"fallback port map {args.port}", api_base_for(args, args.port)
+        if args.port in known_model_by_port(args):
+            return known_model_by_port(args)[args.port], f"fallback port map {args.port}", api_base_for(args, args.port)
         raise SystemExit(f"Cannot infer model name for port {args.port}. Pass --model explicitly.")
+
+    if args.profile:
+        port = port_for_profile(args, args.profile)
+        args.port = port
+        try:
+            served_models = fetch_served_models(args, port=port)
+        except Exception:
+            served_models = []
+        if args.model:
+            return args.model, "command line", api_base_for(args, port)
+        if served_models:
+            return served_models[0], models_endpoint(args, port), api_base_for(args, port)
+        return DEFAULT_MODEL_BY_PROFILE[args.profile], f"fallback profile {args.profile}", api_base_for(args, port)
 
     if args.model:
         found = scan_served_models(args)
@@ -160,17 +218,22 @@ def resolve_service(args: argparse.Namespace) -> tuple[str, str, str]:
                 args.port = port
                 return args.model, f"{models_endpoint(args, port)}", api_base_for(args, port)
 
-        mapped_port = model_to_port(args.model)
+        mapped_port = model_to_port(args, args.model)
         if mapped_port is not None:
             args.port = mapped_port
-            return args.model, f"fallback model map {mapped_port}", api_base_for(args, mapped_port)
+            try:
+                served_models = fetch_served_models(args, port=mapped_port)
+            except Exception:
+                served_models = []
+            source = models_endpoint(args, mapped_port) if served_models else f"fallback model profile map {mapped_port}"
+            return args.model, source, api_base_for(args, mapped_port)
 
         if found:
             details = ", ".join(f"{port}:{models}" for port, models in found.items())
             raise SystemExit(f"Model {args.model!r} was not found on probed ports. Found: {details}")
         raise SystemExit(
             f"Cannot infer port for model {args.model!r}. Pass --port explicitly, "
-            f"or use one of the known models: {', '.join(MODEL_BY_PORT.values())}"
+            f"or pass --profile with --base-port."
         )
 
     found = scan_served_models(args)
@@ -178,16 +241,20 @@ def resolve_service(args: argparse.Namespace) -> tuple[str, str, str]:
         port = sorted(found)[0]
         args.port = port
         models = found[port]
-        mapped_model = MODEL_BY_PORT.get(port)
+        mapped_model = known_model_by_port(args).get(port)
         model = mapped_model if mapped_model in models else models[0]
         return model, f"{models_endpoint(args, port)}", api_base_for(args, port)
 
-    args.port = DEFAULT_PORT
-    return MODEL_BY_PORT[DEFAULT_PORT], f"fallback default port {DEFAULT_PORT}", api_base_for(args, DEFAULT_PORT)
+    args.port = args.base_port
+    return DEFAULT_MODEL_BY_PROFILE["8b"], f"fallback default port {args.base_port}", api_base_for(args, args.base_port)
 
 
 def endpoint(args: argparse.Namespace) -> str:
     api_base = api_base_for(args)
+    return f"{api_base.rstrip('/')}/chat/completions"
+
+
+def endpoint_from_api_base(api_base: str) -> str:
     return f"{api_base.rstrip('/')}/chat/completions"
 
 
@@ -503,7 +570,7 @@ def main() -> None:
         prompt += "\n" + args.prompt_extra.strip()
     image_urls = [local_url(path) for path in image_paths]
     payload = build_payload(args, model, image_urls, prompt)
-    url = endpoint(args)
+    url = endpoint_from_api_base(resolved_api_base)
 
     print("=" * 72)
     print("VLM reasoning demo")
@@ -512,6 +579,9 @@ def main() -> None:
     print(f"Model: {model}")
     print(f"Model source: {model_source}")
     print(f"Resolved API base: {resolved_api_base}")
+    print(f"Base port: {args.base_port}")
+    if args.profile:
+        print(f"Profile: {args.profile}")
     print(f"Streaming: {not args.no_stream}")
     print(f"Max tokens: {args.max_tokens}")
     print("\nQuestion info:")
@@ -524,6 +594,8 @@ def main() -> None:
             print(f"  Clip: {row.get('start')}s - {row.get('end')}s")
     print(f"  Metadata: {source_path}")
     print(f"  Image count: {len(image_urls)}")
+    if args.source == "mvbench":
+        print(f"  Requested frames: {args.frames}")
     print("Images:")
     for idx, image_url in enumerate(image_urls, 1):
         print(f"  {idx}. {image_info(image_url)}")
