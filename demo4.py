@@ -57,6 +57,7 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Comma-separated ports to scan when --model is given without --port.",
     )
+    parser.add_argument("--list-models", action="store_true", help="Print models found on probed ports and exit.")
     parser.add_argument("--model", default="", help="Optional. Can be inferred from /v1/models or --port.")
     parser.add_argument("--source", choices=["mvbench", "mmiu"], default="mvbench")
     parser.add_argument("--task", default="multiple_image_captioning", help="MMIU task name when --source mmiu.")
@@ -161,6 +162,22 @@ def scan_served_models(args: argparse.Namespace) -> dict[int, list[str]]:
     return found
 
 
+def normalize_model_name(model: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", model.lower())
+
+
+def model_matches(requested: str, served: str) -> bool:
+    req = normalize_model_name(requested)
+    got = normalize_model_name(served)
+    return req == got or req in got or got in req
+
+
+def format_found_models(found: dict[int, list[str]]) -> str:
+    if not found:
+        return "none"
+    return ", ".join(f"{port}:{models}" for port, models in sorted(found.items()))
+
+
 def resolve_service(args: argparse.Namespace) -> tuple[str, str, str]:
     if args.api_base:
         models = []
@@ -217,6 +234,11 @@ def resolve_service(args: argparse.Namespace) -> tuple[str, str, str]:
             if args.model in models:
                 args.port = port
                 return args.model, f"{models_endpoint(args, port)}", api_base_for(args, port)
+        for port, models in found.items():
+            for served_model in models:
+                if model_matches(args.model, served_model):
+                    args.port = port
+                    return served_model, f"{models_endpoint(args, port)} fuzzy matched {args.model!r}", api_base_for(args, port)
 
         mapped_port = model_to_port(args, args.model)
         if mapped_port is not None:
@@ -225,12 +247,20 @@ def resolve_service(args: argparse.Namespace) -> tuple[str, str, str]:
                 served_models = fetch_served_models(args, port=mapped_port)
             except Exception:
                 served_models = []
-            source = models_endpoint(args, mapped_port) if served_models else f"fallback model profile map {mapped_port}"
+            if served_models:
+                for served_model in served_models:
+                    if model_matches(args.model, served_model):
+                        return served_model, f"{models_endpoint(args, mapped_port)} fuzzy matched {args.model!r}", api_base_for(args, mapped_port)
+                print(
+                    f"Warning: inferred port {mapped_port}, but {models_endpoint(args, mapped_port)} "
+                    f"lists {served_models}; sending {args.model!r} anyway."
+                )
+                return args.model, f"{models_endpoint(args, mapped_port)} model mismatch", api_base_for(args, mapped_port)
+            source = f"fallback model profile map {mapped_port}"
             return args.model, source, api_base_for(args, mapped_port)
 
         if found:
-            details = ", ".join(f"{port}:{models}" for port, models in found.items())
-            raise SystemExit(f"Model {args.model!r} was not found on probed ports. Found: {details}")
+            raise SystemExit(f"Model {args.model!r} was not found on probed ports. Found: {format_found_models(found)}")
         raise SystemExit(
             f"Cannot infer port for model {args.model!r}. Pass --port explicitly, "
             f"or pass --profile with --base-port."
@@ -552,6 +582,16 @@ def print_summary(model: str, result: dict) -> None:
 
 def main() -> None:
     args = parse_args()
+    if args.list_models:
+        found = scan_served_models(args)
+        print("Probed models:")
+        if found:
+            for port, models in sorted(found.items()):
+                print(f"  {port}: {models}")
+        else:
+            print("  none")
+        return
+
     model, model_source, resolved_api_base = resolve_service(args)
     if args.source == "mvbench":
         source_path, row, image_paths, prompt, expected = load_mvbench_sample(args.index, args.frames)
@@ -620,7 +660,13 @@ def main() -> None:
         else:
             result = stream_response(url, payload, args.timeout)
     except urllib.error.URLError as exc:
-        raise SystemExit(f"\nRequest failed: {exc}") from exc
+        raise SystemExit(
+            f"\nRequest failed: {exc}\n"
+            f"Endpoint: {url}\n"
+            f"Model: {model}\n"
+            f"Model source: {model_source}\n"
+            f"Hint: run with --list-models or pass the working --port explicitly."
+        ) from exc
 
     time.sleep(0.1)
     print_summary(model, result)
