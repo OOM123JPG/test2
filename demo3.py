@@ -440,7 +440,7 @@ Choices:
 {choices}
 
 Answer in exactly two lines:
-Evidence: one short sentence based only on the frames.
+Evidence: 2 to 3 concise sentences based only on the frames, describing the key frames in order.
 Final answer: <letter>."""
 
 
