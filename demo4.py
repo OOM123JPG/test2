@@ -66,6 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-tokens", type=int, default=80)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--timeout", type=float, default=300.0)
+    parser.add_argument("--print-delay", type=float, default=0.03, help="Seconds to sleep after printing each streamed token.")
     parser.add_argument("--no-stream", action="store_true")
     parser.add_argument("--show-payload", action="store_true")
     parser.add_argument("--curl-only", action="store_true")
@@ -413,16 +414,16 @@ def print_metrics(
     return result
 
 
-def stream_response(url: str, payload: dict, timeout: float) -> dict:
+def stream_response(url: str, payload: dict, timeout: float, print_delay: float = 0.0) -> dict:
     start = time.perf_counter()
     first_token_at: float | None = None
     generated = ""
     usage: dict | None = None
     finish_reason = ""
+    tokens_to_print: list[str] = []
 
     with post(url, payload, timeout) as resp:
         print(f"\nHTTP {resp.status} {resp.reason}")
-        print("\nModel output:")
         for raw in resp:
             line = raw.decode("utf-8", errors="replace").strip()
             if not line or not line.startswith("data:"):
@@ -443,8 +444,13 @@ def stream_response(url: str, payload: dict, timeout: float) -> dict:
                 if first_token_at is None:
                     first_token_at = time.perf_counter()
                 generated += token
-                print(token, end="", flush=True)
+                tokens_to_print.append(token)
     end = time.perf_counter()
+    print("\nModel output:")
+    for token in tokens_to_print:
+        print(token, end="", flush=True)
+        if print_delay > 0:
+            time.sleep(print_delay)
     return print_metrics(start, end, first_token_at, generated, usage, finish_reason)
 
 
@@ -661,7 +667,7 @@ def main() -> None:
         if args.no_stream:
             result = non_stream_response(url, payload, args.timeout)
         else:
-            result = stream_response(url, payload, args.timeout)
+            result = stream_response(url, payload, args.timeout, args.print_delay)
     except urllib.error.URLError as exc:
         raise SystemExit(
             f"\nRequest failed: {exc}\n"
