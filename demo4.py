@@ -402,17 +402,29 @@ def print_metrics(
         print(f"  Prompt tokens: {prompt_tokens}")
         print(f"  Output tokens: {completion_tokens}")
         print(f"  Total tokens: {total_tokens}")
+        total_throughput = total_tokens / total if total_tokens and total > 0 else None
         if completion_tokens and total > 0:
             output_throughput = completion_tokens / total
-            print(f"  Output throughput: {output_throughput:.2f} tok/s")
+            print(f"  Output throughput (e2e): {output_throughput:.2f} tok/s")
         else:
             output_throughput = None
+        decode_time = None
+        decode_throughput = None
+        if completion_tokens and first_token_at is not None:
+            decode_time = max(end - first_token_at, 1e-9)
+            decode_throughput = completion_tokens / decode_time
+            print(f"  Decode throughput (after TTFT): {decode_throughput:.2f} tok/s")
+        if total_throughput is not None:
+            print(f"  Total throughput: {total_throughput:.2f} tok/s")
         result.update(
             {
                 "prompt_tokens": prompt_tokens,
                 "output_tokens": completion_tokens,
                 "total_tokens": total_tokens,
                 "output_throughput": output_throughput,
+                "decode_time_s": decode_time,
+                "decode_throughput": decode_throughput,
+                "total_throughput": total_throughput,
             }
         )
     else:
@@ -574,8 +586,12 @@ def print_summary(model: str, result: dict) -> None:
     if result.get("ttft_ms") is not None:
         print(f"Average TTFT: {result['ttft_ms']:.1f} ms")
     if result.get("output_throughput") is not None:
-        print(f"Average output throughput: {result['output_throughput']:.2f} tok/s")
-        print(f"Overall output throughput: {result['output_throughput']:.2f} tok/s")
+        print(f"Average output throughput (e2e): {result['output_throughput']:.2f} tok/s")
+        print(f"Overall output throughput (e2e): {result['output_throughput']:.2f} tok/s")
+    if result.get("decode_throughput") is not None:
+        print(f"Decode throughput (after TTFT): {result['decode_throughput']:.2f} tok/s")
+    if result.get("total_throughput") is not None:
+        print(f"Total throughput: {result['total_throughput']:.2f} tok/s")
     truncated = 1 if result.get("finish_reason") == "length" else 0
     print(f"Truncated by max_tokens: {truncated}")
 
