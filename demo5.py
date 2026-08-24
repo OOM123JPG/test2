@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", choices=["mvbench", "mmiu"], default="mvbench")
     parser.add_argument("--task", default="multiple_image_captioning", help="MMIU task name when --source mmiu.")
     parser.add_argument("--index", type=int, default=0)
-    parser.add_argument("--frames", type=int, default=32, help="Number of MVBench sampled frames to use. Local cache usually has 4, 8, 16, or 32.")
+    parser.add_argument("--frames", type=int, default=4, help="Number of MVBench sampled frames to use. Local cache usually has 4, 8, 16, or 32.")
     parser.add_argument("--max-tokens", type=int, default=80)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--timeout", type=float, default=300.0)
@@ -582,7 +582,7 @@ def print_summary(model: str, result: dict) -> None:
     print("\n" + "=" * 72)
     print("Summary")
     print("=" * 72)
-    print(f"Model: {model}")
+    # print(f"Model: {model}")
     print("Completed samples: 1")
     if result.get("prompt_tokens") is not None:
         print(f"Prompt tokens: {result['prompt_tokens']}")
