@@ -453,7 +453,8 @@ def stream_response(
                 if first_token_at is None:
                     first_token_at = time.perf_counter()
                 if not first_token_announced:
-                    print("√ First token", flush=True)
+                    prefill_ms = (first_token_at - start) * 1000
+                    print(f"√ First token (Prefill: {prefill_ms:.0f} ms)", flush=True)
                     first_token_announced = True
                 generated += token
                 tokens_to_print.append(token)
